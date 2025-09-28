@@ -1,0 +1,152 @@
+# ASP.NET Core
+# Build and test ASP.NET Core projects targeting .NET Core.
+# Add steps that run tests, create a NuGet package, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
+
+name: HRBlock.PlayWright.UI.Framework.$(Date:yyMM)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+    - master
+
+  paths:
+    include:
+    - HRBlock.EnterpriseTesting
+
+stages: 
+- stage: 'PR'
+
+  condition: and(succeeded(), eq(variables['Build.Reason'], 'PullRequest'))
+  jobs:
+
+  - job: 'PR'
+    pool:
+      name: '$(agentPool)'
+    steps:
+
+    - task: UseDotNet@2
+      displayName: "Install .NET Core SDK"
+      inputs:        
+        version: '8.x'
+    - task: NuGetAuthenticate@1
+      displayName: 'Authenticating NuGet'
+
+    - task: NuGetCommand@2
+      inputs:
+        command: 'restore'
+        restoreSolution: '$(srcsolution)'
+        feedsToUse: 'select'
+        vstsFeed: 'a70eae8d-f5f5-42d4-aabb-1fb3c582d5c4/ba8cec93-2388-408f-8b09-c49b984470cd'
+
+    - task: JavaToolInstaller@0
+      displayName: 'Install Java24'
+      inputs:
+        versionSpec: '24'
+        jdkArchitectureOption: 'x64'
+        jdkSourceOption: 'LocalDirectory'
+        jdkFile: '$(System.DefaultWorkingDirectory)\Resources\openjdk-24.0.2_windows-x64_bin.zip'
+        jdkDestinationDirectory: '$(agent.toolsDirectory)/jdk24'
+        cleanDestinationDirectory: true	
+
+    - task: SonarQubePrepare@5
+      displayName: 'Prepare analysis on SonarQube'
+      inputs:
+        SonarQube: '$(sonar.serviceConnection)'
+        scannerMode: 'MSBuild'
+        projectKey: '$(sonar.projectKey)'
+        projectName: '$(sonar.projectName)'
+        projectVersion: '$(Build.BuildNumber)'  
+        extraProperties: |
+          sonar.cs.opencover.reportsPaths=$(Agent.TempDirectory)/**/coverage.opencover.xml
+          sonar.cs.vstest.reportsPaths=$(Agent.TempDirectory)/**/*.trx
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: 'build'
+        projects: '$(srcsolution)'
+
+    - task: SonarQubeAnalyze@5
+      displayName: 'Run code analysis'
+
+    - task: SonarQubePublish@5
+      displayName: 'Publish quality gate result'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Executing Unit Test cases'
+      inputs:
+        command: 'test'
+        projects: '$(testproject)'
+        arguments: '--configuration $(buildConfiguration) --collect "XPlat Code Coverage" --settings runsettings.xml'
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish code coverage report'
+      inputs:
+        codeCoverageTool: 'Cobertura'
+        summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
+
+ 
+
+- stage: 'build'
+
+  condition: and(ne(variables['Build.Reason'], 'PullRequest'), in(variables['Build.Reason'], 'Manual', 'IndividualCI'))
+  jobs:
+  - job: 'build'
+    pool:
+      name: '$(agentPool)'
+
+    steps:
+    - task: UseDotNet@2
+      displayName: "Install .NET Core SDK"
+      inputs:        
+        version: '8.x'
+
+    - task: NuGetAuthenticate@1
+      displayName: 'Authenticating NuGet'
+
+    - task: NuGetCommand@2
+      displayName: 'Nuget Restore'
+      inputs:
+        command: 'restore'
+        restoreSolution: '$(srcsolution)'
+        feedsToUse: 'select'
+        vstsFeed: 'a70eae8d-f5f5-42d4-aabb-1fb3c582d5c4/ba8cec93-2388-408f-8b09-c49b984470cd'
+
+    
+    - task: DotNetCoreCLI@2
+      displayName: 'Building the Solution'
+      inputs:
+        command: 'build'
+        projects: '$(srcsolution)'
+
+ 
+    - task: DotNetCoreCLI@2
+      displayName: 'Pack Nuget Package'
+      inputs:
+        command: 'pack'
+        packagesToPack: '$(srcproject)'
+        versionEnvVar: 'nugetVersion'
+        versioningScheme: 'byEnvVar'
+        
+    - task: DotNetCoreCLI@2
+      displayName: 'Publishing Nuget Package'
+      inputs:
+        command: 'push'
+        packagesToPush: '$(Build.ArtifactStagingDirectory)/*.nupkg'
+        nuGetFeedType: 'internal'
+        publishVstsFeed: 'Enterprise Testing/Enterprise-Testing'
+
+      
+variables:
+  agentPool: 'E2EAutomation'
+  srcsolution: 'PlaywrightEnterpriseAutomation.sln'  
+  srcproject: 'PlaywrightUILibrary/HRBlock.PlaywrightUI.csproj'
+  major: '2'
+  minor: '0'
+  suffix: 'beta'
+  revision: $[counter(variables['minor'], 1)]
+  nugetVersion: '$(major).$(minor).$(revision)-$(suffix)'
+  sonar.serviceConnection: 'E2E_EnterpriseDataWarehouse_SonarQubeConnection'
+  sonar.projectKey: 'com.hrb.e2et.edw'
+  sonar.projectName: 'HRBlock.E2E.PlaywrighEnterpriseAutomation'
+  testproject: 'HRBlock.PlaywrightUI.Tests/HRBlock.PlaywrightUI.Tests.csproj'
+
